@@ -255,6 +255,18 @@ let set_flags_logic (m:mach) (v:int64) : unit =
     - set the condition flags
 *)
 
+let proc_logic (m:mach) (dst:operand) (r:int64) : unit =
+    write_operand m dst r; set_flags_logic m r; increase_rip m
+
+let proc_shift (m:mach) (dst:operand) (a:int) (r:int64) (fo:bool) : unit = 
+  write_operand m dst r;
+  if a <> 0 then begin
+    m.flags.fs <- Int64.compare r 0L < 0;
+    m.flags.fz <- r = 0L;
+    if a = 1 then m.flags.fo <- fo
+  end;
+  increase_rip m
+
 let step (m:mach) : unit =
   let (op, args) = fetch_ins m in
   let v = interp_operand m in (*v needs a operand and computes its value*) 
@@ -271,26 +283,23 @@ let step (m:mach) : unit =
   (*Logic*)
   |Notq, [dst] -> let r = Int64.lognot (v dst) in
                   wr dst r; increase_rip m
-  |Andq, [src; dst] -> let r = Int64.logand (v src) (v dst) in
-                        wr dst r; set_flags_logic m r; increase_rip m
-  |Orq, [src;dst] -> let r = Int64.logor (v src) (v dst) in
-                    wr dst r; set_flags_logic m r; increase_rip m
-  |Xorq, [src;dst] -> let r = Int64.logxor (v src) (v dst) in
-                      wr dst r; set_flags_logic m r; increase_rip m
+  |Andq, [src; dst] -> let r = Int64.logand (v src) (v dst) in proc_logic m dst r
+  |Orq, [src;dst] -> let r = Int64.logor (v src) (v dst) in proc_logic m dst r
+  |Xorq, [src;dst] -> let r = Int64.logxor (v src) (v dst) in proc_logic m dst r
 
   (*Bit*)
-  |Sarq, [amt;dst] -> wr dst (Int64.shift_right (v dst) (Int64.to_int (v amt))); increase_rip m
-  |Shlq, [amt;dst] -> wr dst (Int64.shift_left (v dst) (Int64.to_int (v amt))); increase_rip m
-  |Shrq, [amt;dst] -> wr dst (Int64.shift_right_logical (v dst) (Int64.to_int (v amt))); increase_rip m
+  |Sarq, [amt;dst] -> let a = Int64.to_int (v amt) and x = v dst in proc_shift m dst a (Int64.shift_right x a) false
+  |Shlq, [amt;dst] -> let a = Int64.to_int (v amt) and x = v dst in proc_shift m dst a (Int64.shift_left x a) (Int64.compare (Int64.logxor x (Int64.shift_left x 1)) 0L < 0)
+  |Shrq, [amt;dst] -> let a = Int64.to_int (v amt) and x = v dst in proc_shift m dst a (Int64.shift_right_logical x a) (Int64.compare x 0L < 0)
   |Set cc, [dst] -> let b = if interp_cnd m.flags cc then 1L else 0L in (*Claude*)
                     wr dst (Int64.logor (Int64.logand (v dst) (Int64.lognot 0xFFL)) b);
                     increase_rip m
-  (*Movmenet No Flags*)
-  |Leaq, [ind;dst] -> wr dst (interp_addr m ind); increase_rip m(*hier noch einen pointer zu v*)
+  (*Movmenet - No Flags*)
+  |Leaq, [ind;dst] -> wr dst (interp_addr m ind); increase_rip m (*hier interp_addr weil wir die adresse als value haben*)
   |Movq, [src;dst] -> wr dst (v src);increase_rip m
-  |Pushq, [src] -> wr (Reg Rsp) (Int64.sub (v (Reg Rsp )) 8L);
-                  wr (Ind2 Rsp) (v src);
-                  increase_rip m
+  |Pushq, [src] -> wr (Reg Rsp) (Int64.sub (v (Reg Rsp)) 8L);
+                    wr (Ind2 Rsp) (v src);
+                    increase_rip m
   |Popq, [dst] -> wr dst (v (Ind2 Rsp)); 
                   wr (Reg Rsp) (Int64.add (v (Reg Rsp)) 8L);
                   increase_rip m
@@ -301,10 +310,10 @@ let step (m:mach) : unit =
   |Jmp, [src] -> wr (Reg Rip) (v src)
   |Callq, [src] ->  wr (Reg Rsp) (Int64.sub (v (Reg Rsp)) 8L);
                     wr (Ind2 Rsp) (v (Reg Rip));
-                    wr (Reg Rsp) (v src)
+                    wr (Reg Rip) (v src)
   |Retq, [] ->  wr (Reg Rip) (v (Ind2 Rsp)); 
                 wr (Reg Rsp) (Int64.add (v (Reg Rsp)) 8L)
-  |J cc, [src] -> if interp_cnd m.flags cc then wr (Reg Rsp) (v src) else increase_rip m
+  |J cc, [src] -> if interp_cnd m.flags cc then wr (Reg Rip) (v src) else increase_rip m
   |_ -> failwith "no operand"
   
   
